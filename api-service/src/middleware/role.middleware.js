@@ -1,0 +1,16 @@
+// src/middleware/role.middleware.js
+// Purpose: Role-based access control — restrict routes to specific roles
+
+const ApiError = require('../utils/ApiError');
+
+const requireRole = (...roles) => (req, res, next) => {
+  if (!req.user) {
+    return next(ApiError.unauthorized('Authentication required'));
+  }
+  if (!roles.includes(req.user.role)) {
+    return next(ApiError.forbidden(`Access denied. Required role: ${roles.join(' or ')}`));
+  }
+  next();
+};
+
+module.exports = { requireRole };

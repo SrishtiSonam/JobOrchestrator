@@ -1,0 +1,117 @@
+version: '3.9'
+
+services:
+  # ── Infrastructure ────────────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7
+    container_name: ejps-mongodb
+    restart: unless-stopped
+    ports:
+      - '27017:27017'
+    volumes:
+      - mongo-data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: event-job-system
+    networks:
+      - ejps-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: ejps-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - ejps-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Application services ───────────────────────────────────────────────────
+  api-service:
+    build:
+      context: ./api-service
+      dockerfile: Dockerfile
+    container_name: ejps-api
+    restart: unless-stopped
+    ports:
+      - '5000:5000'
+    env_file:
+      - ./api-service/.env
+    environment:
+      MONGO_URI: mongodb://mongodb:27017/event-job-system
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      NODE_ENV: production
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ejps-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  worker-service:
+    build:
+      context: ./worker-service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./worker-service/.env
+    environment:
+      MONGO_URI: mongodb://mongodb:27017/event-job-system
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      NODE_ENV: production
+      WORKER_CONCURRENCY: 5
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ejps-network
+    # Scale workers horizontally:
+    # docker-compose up --scale worker-service=3
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: ejps-client
+    restart: unless-stopped
+    ports:
+      - '3000:80'
+    depends_on:
+      - api-service
+    networks:
+      - ejps-network
+
+volumes:
+  mongo-data:
+  redis-data:
+
+networks:
+  ejps-network:
+    driver: bridge
